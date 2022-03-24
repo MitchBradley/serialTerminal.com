@@ -1,149 +1,258 @@
 <style>
+    body {
+        background-color: #505050;
+    }
     * {
-        background-color: #352e2e;
+        /* background-color: #352e2e; */
         font-family: monospace;
-        color: rgb(60, 255, 1);
+        font-size: 18px;
+        color: rgb(220, 220, 220);
         padding: 0px;
     }
 
     button,
     datalist {
-        background-color: rgb(85, 85, 85);
+        background-color: rgb(50, 50, 50);
+        border-radius: 8px;
+        border-style: outset;
+        padding: 5px;
     }
 
     input[type=text] {
-        color: rgb(179, 255, 179);
-        background-color: rgb(102, 86, 86);
+        color: rgb(220, 220, 220);
+        background-color: rgb(102, 102, 102);
         border: 1px solid;
         border-color: #696 #363 #363 #696;
+        font-size: 18px;
+        padding: 5px;
     }
 
     #serialResults {
         font-family: monospace;
         white-space: pre;
-        height: calc(100% - 120px);
+        height: calc(100% - 95px);
         width: calc(100% - 20px);
-        border-style: solid;
+        border-style: none;
         overflow: scroll;
-        background-color: rgb(88, 92, 92);
-        padding: 10px;
-        margin: 0px;
+        background-color: rgb(64, 64, 64);
+        padding: 5px;
+        margin: 3px;
     }
+
+    /* Modal Content/Box */
+    .about-content {
+        background-color: black;
+        display: none; /* Hidden by default */
+        position: fixed; /* Stay in place */
+        z-index: 1; /* Sit on top */
+        
+        /* Center in window */
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+
+        padding: 20px;
+        border: 1px solid #888;
+        width: fit-content;
+    }
+
+/* The Close Button */
+.close {
+  color: #aaa;
+  float: right;
+  font-size: 28px;
+  font-weight: bold;
+}
+
+.close:hover,
+.close:focus {
+  color: black;
+  text-decoration: none;
+  cursor: pointer;
+}
 </style>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fastest Serial terminal in your browser for Chrome.</title>
-<meta name="Description" content="Set your baud speed and hit connect.
- A serial terminal that runs with out any plugins in chrome.">
+<meta name="Description" content="Hit connect.
+A FluidNC-optimized serial terminal for Chrome and Edge.">
+<div>
+  <div style="display:flex; column-gap: 5px;">
+    <button onclick="connectSerial()" id="connect">Connect</button>
+    <button onclick="serialResultsDiv.innerHTML = '';">Clear</button>
+    <button onclick="sendQuestion()">Status</button>
+    <button onclick="resetESP32()">ResetESP32</button>
+    <div style="flex:1;"></div>
+    <!-- <button onclick="about()" style="align-self: flex-end;">About</button> -->
+    <button onclick="about()">About</button>
+  </div>
 
-<button onclick="connectSerial()">Connect</button>
-Baud:
-<input type="text" id="baud" list="baudList" style="width: 10ch;" onclick="this.value = ''"
-    onchange="localStorage.baud = this.value">
-<datalist id="baudList">
-    <option value="110">110</option>
-    <option value="300">300</option>
-    <option value="600">600</option>
-    <option value="1200">1200</option>
-    <option value="2400">2400</option>
-    <option value="4800">4800</option>
-    <option value="9600">9600</option>
-    <option value="14400">14400</option>
-    <option value="19200">19200</option>
-    <option value="38400">38400</option>
-    <option value="57600">57600</option>
-    <option value="115200">115200</option>
-    <option value="128000">128000</option>
-    <option value="256000">256000</option>
-</datalist>
-<button onclick="serialResultsDiv.innerHTML = '';">Clear</button>
+  <div id="serialResults">
+  </div>
 
-<br>
-<input type="text" id="lineToSend" style="width:calc(100% - 165px)">
-<button onclick="sendSerialLine()" style="width:45px">Send</button>
-<button onclick="sendCharacterNumber()" style="width:100px">Send Char</button>
-<br>
-
-<input type="checkbox" id="addLine" onclick="localStorage.addLine = this.checked;" checked>
-<label for="addLine">send with /r/n</label>
-
-<input type="checkbox" id="echoOn" onclick="localStorage.echoOn = this.checked;" checked>
-<label for="echoOn">echo</label>
-
-
-<br>
-<div id="serialResults">
+  <div style="padding: 3px; display: flex; column-gap: 5px;">
+    <input type="text" id="lineToSend" style="flex:1;">
+    <button onclick="sendSerialLine()">Send</button>
+  </div>
 </div>
 
+<div id="about" class="about-content">
+  <button class="close" onclick="unAbout();">&times;</button>
+  <p>FluidNC Web Terminal by Mitch Bradley</p>
+  <p>Based on Serial Terminal © 2021 Mike Molinari (mmiscool)<br>
+    <a href="https://github.com/mmiscool/serialTerminal.com">https://github.com/mmiscool/serialTerminal.com</a>
+  </p>
+</div>
 <script>
-    var port, textEncoder, writableStreamClosed, writer;
+  var port, textEncoder, writableStreamClosed, writer, reader, readableStreamClosed;
 
-    async function connectSerial() {
-        try {
-            // Prompt user to select any serial port.
-            port = await navigator.serial.requestPort();
-            await port.open({ baudRate: document.getElementById("baud").value });
-            listenToPort();
+  async function connectSerial() {
+      if (port) {
+          reader.cancel();
+          await readableStreamClosed.catch(() => { /* Ignore the error */ });
 
-            textEncoder = new TextEncoderStream();
-            writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+          writer.close();
+          await writableStreamClosed;
+          await port.close();
+          port = null;
+          document.getElementById("connect").innerHTML = "Connect";
+          return;
+      }
+      try {
+          // Prompt user to select any serial port.
+          port = await navigator.serial.requestPort();
+          // await port.open({ baudRate: document.getElementById("baud").value });
+          await port.open({ baudRate: 115200 });
+          listenToPort();
 
-            writer = textEncoder.writable.getWriter();
-        } catch {
-            alert("Serial Connection Failed");
-        }
-    }
+          textEncoder = new TextEncoderStream();
+          writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
 
-    async function sendCharacterNumber(){
-       document.getElementById("lineToSend").value = String.fromCharCode(document.getElementById("lineToSend").value);
-    }
+          writer = textEncoder.writable.getWriter();
+          document.getElementById("connect").innerHTML = "Disconnect";
+      } catch {
+          alert("Serial Connection Failed");
+          port = null;
+      }
+  }
+
+  async function sendQuestion(){
+      if (!port) {
+          alert("Not connected");
+          return;
+      }
+      await writer.write("?");
+  }
    
-    async function sendSerialLine() {
-        dataToSend = document.getElementById("lineToSend").value;
-        if (document.getElementById("addLine").checked == true) dataToSend = dataToSend + "\r\n";
-        if (document.getElementById("echoOn").checked == true) appendToTerminal("> " + dataToSend);
-        await writer.write(dataToSend);
-        document.getElementById("lineToSend").value = "";
-        //await writer.releaseLock();
-    }
+  async function resetESP32(){
+      if (!port) {
+          alert("Not connected");
+          return;
+      }
+      await port.setSignals({ dataTerminalReady: false });
+      await port.setSignals({ requestToSend: true });
+      setTimeout(function() {
+          port.setSignals({ requestToSend: false });
+      }, 500);
+  }
+   
+  async function sendSerialLine() {
+      if (!port) {
+          alert("Not connected");
+          return;
+      }
+      dataToSend = document.getElementById("lineToSend").value;
+      appendToTerminal('<span style="color:cyan;">' + dataToSend + '</span><br>');
+      dataToSend = dataToSend + "\n";
+      await writer.write(dataToSend);
+      //await writer.releaseLock();
+  }
 
-    async function listenToPort() {
-        const textDecoder = new TextDecoderStream();
-        const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
-        const reader = textDecoder.readable.getReader();
+  function EntitiesHtml(string) {
+      return String(string).replace(/&/g, '&amp;').replace(/>/g, '&gt;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  }
 
-        // Listen to data coming from the serial device.
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-                // Allow the serial port to be closed later.
-                //reader.releaseLock();
-                break;
-            }
-            // value is a string.
-            appendToTerminal(value);
-        }
-    }
+  class Colorizer {
+      constructor() {
+          // A container for holding stream data until a new line.
+          this.chunks = "";
+      }
 
-    const serialResultsDiv = document.getElementById("serialResults");
+      transform(chunk, controller) {
+          // Append new chunks to existing chunks.
+          this.chunks += chunk;
+          // For each line breaks in chunks, send the parsed lines out.
+          const lines = this.chunks.split("\r\n");
+          this.chunks = lines.pop();
+          lines.forEach((line) => {
+              line = EntitiesHtml(line);
+              if (line.startsWith('[MSG:INFO')) {
+                  line = '<span style="color:lime;">' + line + '</span>';
+              } else if (line.startsWith('[MSG:ERR')) {
+                  line = '<span style="color:red;">' + line + '</span>';
+              } else if (line.startsWith('[MSG:WARN')) {
+                  line = '<span style="color:yellow;">' + line + '</span>';
+              } else if (line.startsWith('[MSG:DBG')) {
+                  line = '<span style="color:yellow;">' + line + '</span>';
+              }
+              controller.enqueue(line+'<br>');
+          });
+      }
 
-    async function appendToTerminal(newStuff) {
-        serialResultsDiv.innerHTML += newStuff;
-        if (serialResultsDiv.innerHTML.length > 3000) serialResultsDiv.innerHTML = serialResultsDiv.innerHTML.slice(serialResultsDiv.innerHTML.length - 3000);
+      flush(controller) {
+          // When the stream is closed, flush any remaining chunks out.
+          controller.enqueue(this.chunks);
+      }
+  }
 
-        //scroll down to bottom of div
-        serialResultsDiv.scrollTop = serialResultsDiv.scrollHeight;
-    }
+  async function listenToPort() {
+      const textDecoder = new TextDecoderStream();
+      readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+      reader = textDecoder.readable
+          .pipeThrough(new TransformStream(new Colorizer()))
+          .getReader();
+      var color = false;
 
-    document.getElementById("lineToSend").addEventListener("keyup", async function (event) {
-        if (event.keyCode === 13) {
-            sendSerialLine();
-        }
-    })
+      // Listen to data coming from the serial device.
+      while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+              // Allow the serial port to be closed later.
+              reader.releaseLock();
+              break;
+          }
+          // value is a string.
+          appendToTerminal(value);
+      }
+  }
 
-    document.getElementById("baud").value = (localStorage.baud == undefined ? 9600 : localStorage.baud);
-    document.getElementById("addLine").checked = (localStorage.addLine == "false" ? false : true);
-    document.getElementById("echoOn").checked = (localStorage.echoOn == "false" ? false : true);
+  const serialResultsDiv = document.getElementById("serialResults");
+
+  async function appendToTerminal(newStuff) {
+      serialResultsDiv.innerHTML += newStuff;
+      if (serialResultsDiv.innerHTML.length > 30000) serialResultsDiv.innerHTML = serialResultsDiv.innerHTML.slice(serialResultsDiv.innerHTML.length - 30000);
+
+      //scroll down to bottom of div
+      serialResultsDiv.scrollTop = serialResultsDiv.scrollHeight;
+  }
+
+  document.getElementById("lineToSend").addEventListener("keyup", async function (event) {
+      if (event.keyCode === 13) {
+          sendSerialLine();
+      }
+  })
+
+  var aboutBox = document.getElementById('about');
+  
+  function about() {
+      aboutBox.style.display = "block";
+  }
+  function unAbout() {
+      aboutBox.style.display = "none";
+  }
+  window.onclick = function(event) {
+      if (event.target == aboutBox) {
+          unAbout();
+      }
+  }
 
 </script>
-<br> © 2021 Mike Molinari (mmiscool) Source <a
-    href="https://github.com/mmiscool/serialTerminal.com">https://github.com/mmiscool/serialTerminal.com</a>
