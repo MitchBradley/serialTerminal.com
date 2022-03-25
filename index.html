@@ -14,7 +14,7 @@
     datalist {
         background-color: rgb(50, 50, 50);
         border-radius: 8px;
-        border-style: outset;
+        border-style: double;
         padding: 5px;
     }
 
@@ -80,7 +80,9 @@ A FluidNC-optimized serial terminal for Chrome and Edge.">
     <button onclick="connectSerial()" id="connect">Connect</button>
     <button onclick="serialResultsDiv.innerHTML = '';">Clear</button>
     <button onclick="sendQuestion()">Status</button>
-    <button onclick="resetESP32()">ResetESP32</button>
+    <button onclick="resetESP32()">HardReset</button>
+    <button onclick="resetGRBL()">SoftReset</button>
+    <button onclick="unlock()">Unlock</button>
     <div style="flex:1; text-align: center; padding-top: 5px;">FluidNC Web Terminal</div>
     <button onclick="about()">About</button>
   </div>
@@ -90,61 +92,114 @@ A FluidNC-optimized serial terminal for Chrome and Edge.">
 
   <div style="padding: 3px; display: flex; column-gap: 5px;">
     <input type="text" id="lineToSend" style="flex:1;">
-    <button onclick="sendSerialLine()">Send</button>
+    <button onclick="sendLineFromTextBox()">Send</button>
   </div>
 </div>
 
 <div id="about" class="about-content">
-  <button class="close" onclick="unAbout();">&times;</button>
+  <button class="close" onclick="unAbout();">&times; </button>
   <p>FluidNC Web Terminal by Mitch Bradley</p>
   <p>Based on Serial Terminal © 2021 Mike Molinari (mmiscool)<br>
     <a href="https://github.com/mmiscool/serialTerminal.com">https://github.com/mmiscool/serialTerminal.com</a>
   </p>
 </div>
 <script>
-  var port, textEncoder, writableStreamClosed, writer, reader, readableStreamClosed;
+  var port, textEncoder, writableStreamClosed, writer, reader, readableStreamPromise;
 
-  async function connectSerial() {
-      if (port) {
-          reader.cancel();
-          await readableStreamClosed.catch(() => { /* Ignore the error */ });
+  async function attachPort() {
+      listenToPort();
+      textEncoder = new TextEncoderStream();
+      writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
 
+      writer = textEncoder.writable.getWriter();
+      document.getElementById("connect").innerHTML = "Disconnect";
+  }
+  async function closePort(event) {
+      // I know of three cases where closePort() is called:
+      // 1. If the user clicks on Disconnect, that calls reader.cancel() and then
+      //    readableStreamPromise.catch() invokes closePort() with event == undefined.
+      // 2. If the USB port is disconnected, readableStreamPromise.catch() invokes
+      //    closePort() with event == DOMException:The device has been lost.
+      // 3. Sometimes when you connect to the device after turning it on, it closes
+      //    itself and you get event == DOMException:A buffer overrun has been detected.
+      //    This appears to happen because the device has spewed a lot of text at
+      //    startup and the low level code is unhappy about that.  In that case it is
+      //    possible to recover by closing the various streams and then reopening them,
+      //    without having to actually close the port and ask the user to reopen it.
+
+      if (event && event.message && event.message == 'A buffer overrun has been detected.') {
+          // This is case 3 as described above.  We try to recover and finish connecting
           writer.close();
           await writableStreamClosed;
-          await port.close();
-          port = null;
-          document.getElementById("connect").innerHTML = "Connect";
+          attachPort();
+          return;
+      }
+
+      // Cases 1 and 2 as described above.  Shut down the port and disconnect.
+      writer.close();
+      await writableStreamClosed;
+      await port.close();
+      port = null;
+      document.getElementById("connect").innerHTML = "Connect";
+  }
+
+  async function connectSerial() {
+      if (document.getElementById("connect").innerHTML == "Disconnect") {
+          // This will cause the read loop to throw an exception which,
+          // when caught, will close the port
+          reader.cancel();
           return;
       }
       try {
-          // Prompt user to select any serial port.
-          port = await navigator.serial.requestPort();
+          try {
+              // Prompt user to select any serial port.
+              port = await navigator.serial.requestPort();
+          } catch {
+              return;
+          }
           // await port.open({ baudRate: document.getElementById("baud").value });
-          await port.open({ baudRate: 115200 });
-          listenToPort();
-
-          textEncoder = new TextEncoderStream();
-          writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-
-          writer = textEncoder.writable.getWriter();
-          document.getElementById("connect").innerHTML = "Disconnect";
+          await port.open({ baudRate: 115200, bufferSize: 5000 });
+          attachPort();
       } catch {
           alert("Serial Connection Failed");
           port = null;
       }
   }
 
-  async function sendQuestion(){
+  function disconnected() {
       if (!port) {
           alert("Not connected");
+          return true;
+      }
+      return false;
+  }
+
+  async function send(msg) {
+      if (disconnected()) {
           return;
       }
-      await writer.write("?");
+      await writer.write(msg);
+  }
+  async function sendLine(msg) {
+      if (disconnected()) {
+          return;
+      }
+      appendToTerminal('<span style="color:cyan;">' + msg + '</span><br>');
+      send(msg + '\n');
+  }
+
+  async function sendQuestion() {
+      send("?");
+  }
+  async function resetGRBL() {
+      send("\x18");
+  }
+  async function unlock() {
+      sendLine("$x");
   }
    
-  async function resetESP32(){
-      if (!port) {
-          alert("Not connected");
+  async function resetESP32() {
+      if (disconnected()) {
           return;
       }
       await port.setSignals({ dataTerminalReady: false });
@@ -154,16 +209,8 @@ A FluidNC-optimized serial terminal for Chrome and Edge.">
       }, 500);
   }
    
-  async function sendSerialLine() {
-      if (!port) {
-          alert("Not connected");
-          return;
-      }
-      dataToSend = document.getElementById("lineToSend").value;
-      appendToTerminal('<span style="color:cyan;">' + dataToSend + '</span><br>');
-      dataToSend = dataToSend + "\n";
-      await writer.write(dataToSend);
-      //await writer.releaseLock();
+  async function sendLineFromTextBox() {
+      sendLine(document.getElementById("lineToSend").value);
   }
 
   function EntitiesHtml(string) {
@@ -203,13 +250,19 @@ A FluidNC-optimized serial terminal for Chrome and Edge.">
       }
   }
 
+  function bufferError(exc) {
+      console.log("Buffer error");
+  }
+
   async function listenToPort() {
       const textDecoder = new TextDecoderStream();
-      readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+      readableStreamPromise = port.readable.pipeTo(textDecoder.writable);
       reader = textDecoder.readable
           .pipeThrough(new TransformStream(new Colorizer()))
           .getReader();
       var color = false;
+
+      readableStreamPromise.catch((exc) => { closePort(exc); });
 
       // Listen to data coming from the serial device.
       while (true) {
@@ -236,7 +289,7 @@ A FluidNC-optimized serial terminal for Chrome and Edge.">
 
   document.getElementById("lineToSend").addEventListener("keyup", async function (event) {
       if (event.keyCode === 13) {
-          sendSerialLine();
+          sendLineFromTextBox();
       }
   })
 
